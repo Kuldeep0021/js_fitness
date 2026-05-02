@@ -1,20 +1,41 @@
 const express = require('express');
-const dotenv = require('dotenv');
 const cors = require('cors');
-const connectDB = require('./config/db');
 const cronJobs = require('./services/cronJobs');
-
-// Load env vars
-dotenv.config();
-
-// Connect to database
-connectDB();
 
 const app = express();
 
+// security and rate limiting (best-effort requires packages installed)
+try {
+  const helmet = require('helmet');
+  app.use(helmet());
+} catch (e) {
+  console.warn('helmet not installed — skip');
+}
+
+try {
+  const rateLimit = require('express-rate-limit');
+  const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
+  app.use(limiter);
+} catch (e) {
+  console.warn('express-rate-limit not installed — skip');
+}
+
 // Middleware
+const cookieParser = require('cookie-parser');
+try {
+  const morgan = require('morgan');
+  app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+} catch (e) {
+  console.warn('morgan not installed — skip');
+}
 app.use(express.json());
-app.use(cors());
+// ensure cookies are parsed before routes
+app.use(cookieParser());
+// CORS — restrict in production via environment
+const corsOptions = {
+  origin: process.env.CORS_ORIGIN || '*',
+};
+app.use(cors(corsOptions));
 
 // Mount routers
 app.use('/api/auth', require('./routes/authRoutes'));
@@ -30,10 +51,47 @@ app.get('/', (req, res) => {
   res.send('API is running...');
 });
 
-const PORT = process.env.PORT || 5000;
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  // Initialize cron jobs after server starts
-  cronJobs.init();
+// process-level handlers
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled Rejection:', reason);
 });
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+  // optional: exit in production
+  if (process.env.NODE_ENV === 'production') process.exit(1);
+});
+
+// Attach centralized error handlers (require after routes)
+const { notFound, errorHandler } = require('./middleware/errorMiddleware');
+app.use(notFound);
+app.use(errorHandler);
+
+module.exports = app;
+
+// If server.js is run directly, start the server and connect to DB
+if (require.main === module) {
+  const dotenv = require('dotenv');
+  const connectDB = require('./config/db');
+  dotenv.config();
+
+  // Basic env validation
+  const requiredEnvs = ['MONGO_URI', 'JWT_SECRET'];
+  const missing = requiredEnvs.filter((k) => !process.env[k]);
+  if (missing.length) {
+    console.error('Missing required environment variables:', missing.join(', '));
+    if (process.env.NODE_ENV === 'production') process.exit(1);
+  }
+
+  connectDB()
+    .then(() => {
+      const PORT = process.env.PORT || 5000;
+      app.listen(PORT, () => {
+        console.log(`Server running on port ${PORT}`);
+        cronJobs.init();
+      });
+    })
+    .catch((err) => {
+      console.error('Failed to connect to DB:', err);
+      process.exit(1);
+    });
+}

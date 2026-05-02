@@ -3,7 +3,7 @@ const Member = require('../models/Member');
 // @desc    Get dashboard analytics
 // @route   GET /api/dashboard/analytics
 // @access  Private/Admin
-const getDashboardAnalytics = async (req, res) => {
+const getDashboardAnalytics = async (req, res, next) => {
   try {
     // 1. Total Active Members
     const activeMembersCount = await Member.countDocuments({ status: 'Active' });
@@ -36,14 +36,15 @@ const getDashboardAnalytics = async (req, res) => {
       revenueThisMonth += (pricing[m.membershipTier] || 0);
     });
 
-    res.json({
+    res.json({ success: true, data: {
       activeMembersCount,
       revenueThisMonth,
       expiringMembersCount: expiringMembers.length,
       expiringMembers
-    });
+    }});
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    error.statusCode = 500;
+    return next(error);
   }
 };
 

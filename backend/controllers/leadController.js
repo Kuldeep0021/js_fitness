@@ -4,7 +4,7 @@ const axios = require('axios');
 // @desc    Create a lead (from BMI calculator)
 // @route   POST /api/leads
 // @access  Public
-const createLead = async (req, res) => {
+const createLead = async (req, res, next) => {
   try {
     const { name, email, age, height, weight, gender, bmi, calorieEstimate } = req.body;
     
@@ -26,9 +26,10 @@ const createLead = async (req, res) => {
       // We don't fail the request if webhook fails, just log it
     }
 
-    res.status(201).json(lead);
+    res.status(201).json({ success: true, data: lead });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    error.statusCode = 400;
+    return next(error);
   }
 };
 

@@ -4,15 +4,17 @@ const Member = require('../models/Member');
 // @desc    Get all available resources for current user
 // @route   GET /api/resources
 // @access  Private
-const getResources = async (req, res) => {
+const getResources = async (req, res, next) => {
   try {
     if (req.user.role === 'admin') {
       const resources = await Resource.find({});
-      return res.json(resources);
+      return res.json({ success: true, data: resources });
     } else {
       const memberProfile = await Member.findOne({ user: req.user._id });
       if (!memberProfile) {
-         return res.status(404).json({ message: 'Member profile not found' });
+         const err = new Error('Member profile not found');
+         err.statusCode = 404;
+         return next(err);
       }
       
       // Get resources assigned to this member OR assigned to no one (available to all)
@@ -23,17 +25,18 @@ const getResources = async (req, res) => {
           { assignedTo: { $exists: false } }
         ]
       });
-      res.json(resources);
+      res.json({ success: true, data: resources });
     }
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    error.statusCode = 500;
+    return next(error);
   }
 };
 
 // @desc    Create a resource
 // @route   POST /api/resources
 // @access  Private/Admin
-const createResource = async (req, res) => {
+const createResource = async (req, res, next) => {
   try {
     const { title, description, fileUrl, type, assignedTo } = req.body;
     
@@ -45,9 +48,10 @@ const createResource = async (req, res) => {
       assignedTo: assignedTo || []
     });
 
-    res.status(201).json(resource);
+    res.status(201).json({ success: true, data: resource });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    error.statusCode = 400;
+    return next(error);
   }
 };
 

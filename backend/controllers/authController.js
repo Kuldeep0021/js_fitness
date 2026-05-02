@@ -1,53 +1,168 @@
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
+const { v4: uuidv4 } = require('uuid');
+const mongoose = require('mongoose');
+// No per-request DB reconnects; server connects once at startup
 
 const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '30d' });
+  return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: process.env.ACCESS_TOKEN_EXPIRES || '7d' });
+};
+
+const generateRefreshToken = () => {
+  return crypto.randomBytes(40).toString('hex');
 };
 
 // @desc    Auth user & get token
 // @route   POST /api/auth/login
 // @access  Public
-const authUser = async (req, res) => {
-  const { email, password } = req.body;
-  
-  const user = await User.findOne({ email });
-  if (user && (await user.matchPassword(password))) {
-    res.json({
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      token: generateToken(user._id)
-    });
-  } else {
-    res.status(401).json({ message: 'Invalid email or password' });
+const authUser = async (req, res, next) => {
+  try {
+    const { email, password } = req.body;
+    
+    const user = await User.findOne({ email });
+    
+    if (user && (await user.matchPassword(password))) {
+      // generate access and refresh tokens
+      const accessToken = generateToken(user._id);
+      const refreshToken = generateRefreshToken();
+      const tokenId = uuidv4();
+
+      // store hashed refresh token on user with id for efficient lookup
+      const hash = await bcrypt.hash(refreshToken, 10);
+      user.refreshTokens = user.refreshTokens || [];
+      user.refreshTokens.push({ id: tokenId, tokenHash: hash });
+      await user.save();
+
+      // set httpOnly cookie for refresh token containing id:token
+      const cookieVal = `${tokenId}:${refreshToken}`;
+      const cookieOptions = {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: process.env.COOKIE_SAMESITE || 'lax',
+        maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+        path: '/',
+      };
+      if (process.env.COOKIE_DOMAIN) cookieOptions.domain = process.env.COOKIE_DOMAIN;
+      // if sameSite is 'none' ensure secure is true (required by browsers)
+      if ((cookieOptions.sameSite === 'none' || String(cookieOptions.sameSite).toLowerCase() === 'none') && !cookieOptions.secure) cookieOptions.secure = true;
+      res.cookie('refreshToken', cookieVal, cookieOptions);
+
+      res.json({ success: true, data: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        token: accessToken
+      }});
+    } else {
+      return res.status(401).json({ success: false, error: { message: 'Invalid email or password' } });
+    }
+    } catch (error) {
+    return res.status(500).json({ success: false, error: { message: error.message } });
   }
 };
 
 // @desc    Register a new user (for initial setup or admin use)
 // @route   POST /api/auth/register
 // @access  Public (should be protected in production, or seeded)
-const registerUser = async (req, res) => {
-  const { name, email, password, role } = req.body;
+const registerUser = async (req, res, next) => {
+  try {
+    const { name, email, password, role } = req.body;
 
-  const userExists = await User.findOne({ email });
-  if (userExists) {
-    return res.status(400).json({ message: 'User already exists' });
-  }
+    // Disallow open registration unless explicitly enabled
+    if (process.env.ALLOW_REGISTRATION !== 'true') {
+      return res.status(403).json({ success: false, error: { message: 'Registration is disabled' } });
+    }
 
-  const user = await User.create({ name, email, password, role });
-  if (user) {
-    res.status(201).json({
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      token: generateToken(user._id)
-    });
-  } else {
-    res.status(400).json({ message: 'Invalid user data' });
+    const userExists = await User.findOne({ email });
+    if (userExists) {
+      return res.status(400).json({ success: false, error: { message: 'User already exists' } });
+    }
+
+    const user = await User.create({ name, email, password, role });
+    if (user) {
+      res.status(201).json({ success: true, data: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        token: generateToken(user._id)
+      }});
+    } else {
+      return res.status(400).json({ success: false, error: { message: 'Invalid user data' } });
+    }
+  } catch (error) {
+    return res.status(500).json({ success: false, error: { message: error.message } });
   }
 };
 
-module.exports = { authUser, registerUser };
+// @desc Refresh access token using httpOnly refresh cookie
+// @route POST /api/auth/refresh
+// @access Public (cookie required)
+const refreshTokenHandler = async (req, res, next) => {
+  try {
+    const token = req.cookies && req.cookies.refreshToken;
+    if (!token) {
+      return res.status(401).json({ success: false, error: { message: 'No refresh token' } });
+    }
+
+    // cookie contains tokenId:token
+    const parts = token.split(':');
+    if (!parts || parts.length !== 2) {
+      return res.status(401).json({ success: false, error: { message: 'Invalid refresh token format' } });
+    }
+    const [tokenId, tokenValue] = parts;
+
+    // find user by token id
+    const user = await User.findOne({ 'refreshTokens.id': tokenId });
+    if (!user) {
+      return res.status(401).json({ success: false, error: { message: 'Invalid refresh token' } });
+    }
+
+    const rtEntry = user.refreshTokens.find(r => r.id === tokenId);
+    if (!rtEntry) {
+      return res.status(401).json({ success: false, error: { message: 'Invalid refresh token' } });
+    }
+
+    const ok = await bcrypt.compare(tokenValue, rtEntry.tokenHash);
+    if (!ok) {
+      return res.status(401).json({ success: false, error: { message: 'Invalid refresh token' } });
+    }
+
+    const accessToken = generateToken(user._id);
+    res.json({ success: true, data: { token: accessToken } });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: { message: error.message } });
+  }
+};
+
+// @desc Logout (invalidate refresh token cookie)
+// @route POST /api/auth/logout
+const logoutHandler = async (req, res, next) => {
+  try {
+    const token = req.cookies && req.cookies.refreshToken;
+    if (token) {
+      // expect token format tokenId:token
+      const parts = token.split(':');
+      if (parts && parts.length === 2) {
+        const tokenId = parts[0];
+        // remove token entry by id
+        const user = await User.findOne({ 'refreshTokens.id': tokenId });
+        if (user) {
+          user.refreshTokens = user.refreshTokens.filter(rt => rt.id !== tokenId);
+          await user.save();
+        }
+      }
+    }
+    const clearOptions = { path: '/' };
+    if (process.env.COOKIE_DOMAIN) clearOptions.domain = process.env.COOKIE_DOMAIN;
+    res.clearCookie('refreshToken', clearOptions);
+    res.json({ success: true, data: { message: 'Logged out' } });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: { message: error.message } });
+  }
+};
+
+module.exports = { authUser, registerUser, refreshTokenHandler, logoutHandler };

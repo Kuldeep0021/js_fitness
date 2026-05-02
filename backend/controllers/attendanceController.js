@@ -4,14 +4,16 @@ const Member = require('../models/Member');
 // @desc    Log attendance
 // @route   POST /api/attendance
 // @access  Private/Admin
-const logAttendance = async (req, res) => {
+const logAttendance = async (req, res, next) => {
   try {
     const { memberId, date, timeIn, timeOut } = req.body;
     
     // verify member exists
     const member = await Member.findById(memberId);
     if (!member) {
-      return res.status(404).json({ message: 'Member not found' });
+      const err = new Error('Member not found');
+      err.statusCode = 404;
+      return next(err);
     }
 
     const attendance = await Attendance.create({
@@ -21,29 +23,33 @@ const logAttendance = async (req, res) => {
       timeOut
     });
 
-    res.status(201).json(attendance);
+    res.status(201).json({ success: true, data: attendance });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    error.statusCode = 400;
+    return next(error);
   }
 };
 
 // @desc    Get attendance history for a member
 // @route   GET /api/attendance/:memberId
 // @access  Private
-const getAttendanceHistory = async (req, res) => {
+const getAttendanceHistory = async (req, res, next) => {
   try {
     // If user is a member, they can only see their own attendance
     if (req.user.role === 'member') {
       const memberProfile = await Member.findOne({ user: req.user._id });
       if (memberProfile._id.toString() !== req.params.memberId) {
-        return res.status(403).json({ message: 'Not authorized to view this data' });
+        const err = new Error('Not authorized to view this data');
+        err.statusCode = 403;
+        return next(err);
       }
     }
 
     const attendance = await Attendance.find({ member: req.params.memberId }).sort({ date: -1 });
-    res.json(attendance);
+    res.json({ success: true, data: attendance });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    error.statusCode = 500;
+    return next(error);
   }
 };
 

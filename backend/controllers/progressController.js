@@ -4,13 +4,15 @@ const Member = require('../models/Member');
 // @desc    Log weight progress
 // @route   POST /api/progress
 // @access  Private (Member)
-const logProgress = async (req, res) => {
+const logProgress = async (req, res, next) => {
   try {
     const { date, weight } = req.body;
     
     const member = await Member.findOne({ user: req.user._id });
     if (!member) {
-      return res.status(404).json({ message: 'Member profile not found' });
+      const err = new Error('Member profile not found');
+      err.statusCode = 404;
+      return next(err);
     }
 
     const progress = await Progress.create({
@@ -19,28 +21,32 @@ const logProgress = async (req, res) => {
       weight
     });
 
-    res.status(201).json(progress);
+    res.status(201).json({ success: true, data: progress });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    error.statusCode = 400;
+    return next(error);
   }
 };
 
 // @desc    Get progress history
 // @route   GET /api/progress/:memberId
 // @access  Private
-const getProgressHistory = async (req, res) => {
+const getProgressHistory = async (req, res, next) => {
   try {
     if (req.user.role === 'member') {
       const memberProfile = await Member.findOne({ user: req.user._id });
       if (memberProfile._id.toString() !== req.params.memberId) {
-        return res.status(403).json({ message: 'Not authorized to view this data' });
+        const err = new Error('Not authorized to view this data');
+        err.statusCode = 403;
+        return next(err);
       }
     }
 
     const progress = await Progress.find({ member: req.params.memberId }).sort({ date: 1 });
-    res.json(progress);
+    res.json({ success: true, data: progress });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    error.statusCode = 500;
+    return next(error);
   }
 };
 

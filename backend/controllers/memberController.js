@@ -6,7 +6,7 @@ const crypto = require('crypto');
 // @desc    Create a new member
 // @route   POST /api/members
 // @access  Private/Admin
-const createMember = async (req, res) => {
+const createMember = async (req, res, next) => {
   try {
     const { name, email, phone, membershipTier, durationMonths } = req.body;
 
@@ -51,28 +51,30 @@ const createMember = async (req, res) => {
       console.error('Failed to trigger n8n webhook for member:', webhookError.message);
     }
 
-    res.status(201).json(member);
+    res.status(201).json({ success: true, data: member });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    error.statusCode = 400;
+    return next(error);
   }
 };
 
 // @desc    Get all members
 // @route   GET /api/members
 // @access  Private/Admin
-const getMembers = async (req, res) => {
+const getMembers = async (req, res, next) => {
   try {
     const members = await Member.find({}).populate('user', 'name email');
-    res.json(members);
+    res.json({ success: true, data: members });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    error.statusCode = 500;
+    return next(error);
   }
 };
 
 // @desc    Update a member
 // @route   PUT /api/members/:id
 // @access  Private/Admin
-const updateMember = async (req, res) => {
+const updateMember = async (req, res, next) => {
   try {
     const { phone, membershipTier, expirationDate } = req.body;
     
@@ -83,19 +85,22 @@ const updateMember = async (req, res) => {
       if (expirationDate) member.expirationDate = expirationDate;
       
       const updatedMember = await member.save();
-      res.json(updatedMember);
+      res.json({ success: true, data: updatedMember });
     } else {
-      res.status(404).json({ message: 'Member not found' });
+      const err = new Error('Member not found');
+      err.statusCode = 404;
+      return next(err);
     }
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    error.statusCode = 400;
+    return next(error);
   }
 };
 
 // @desc    Update member status
 // @route   PATCH /api/members/:id/status
 // @access  Private/Admin
-const updateMemberStatus = async (req, res) => {
+const updateMemberStatus = async (req, res, next) => {
   try {
     const { status } = req.body; // 'Active' or 'Inactive'
     
@@ -103,28 +108,34 @@ const updateMemberStatus = async (req, res) => {
     if (member) {
       member.status = status;
       const updatedMember = await member.save();
-      res.json(updatedMember);
+      res.json({ success: true, data: updatedMember });
     } else {
-      res.status(404).json({ message: 'Member not found' });
+      const err = new Error('Member not found');
+      err.statusCode = 404;
+      return next(err);
     }
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    error.statusCode = 400;
+    return next(error);
   }
 };
 
 // @desc    Get current member profile
 // @route   GET /api/members/profile
 // @access  Private
-const getMemberProfile = async (req, res) => {
+const getMemberProfile = async (req, res, next) => {
   try {
     const member = await Member.findOne({ user: req.user._id }).populate('user', 'name email');
     if (member) {
-      res.json(member);
+      res.json({ success: true, data: member });
     } else {
-      res.status(404).json({ message: 'Member profile not found' });
+      const err = new Error('Member profile not found');
+      err.statusCode = 404;
+      return next(err);
     }
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    error.statusCode = 500;
+    return next(error);
   }
 };
 

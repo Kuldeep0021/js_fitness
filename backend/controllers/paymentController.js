@@ -9,7 +9,7 @@ const razorpay = new Razorpay({
 // @desc    Create Razorpay Order
 // @route   POST /api/payment/create-order
 // @access  Public
-const createOrder = async (req, res) => {
+const createOrder = async (req, res, next) => {
   try {
     const { amount, planName } = req.body;
 
@@ -21,29 +21,32 @@ const createOrder = async (req, res) => {
 
     // If using placeholder keys, return a mock order to prevent 500 error
     if (!process.env.RAZORPAY_KEY_ID || process.env.RAZORPAY_KEY_ID === 'rzp_test_placeholder') {
-      return res.json({
+      return res.json({ success: true, data: {
         id: `mock_order_${Date.now()}`,
         currency: "INR",
         amount: amount * 100,
         key_id: 'rzp_test_placeholder'
-      });
+      }});
     }
 
     const order = await razorpay.orders.create(options);
     
     if (!order) {
-      return res.status(500).json({ message: "Some error occured" });
+      const err = new Error('Payment gateway returned invalid response');
+      err.statusCode = 500;
+      return next(err);
     }
 
-    res.json({
+    res.json({ success: true, data: {
       id: order.id,
       currency: order.currency,
       amount: order.amount,
       key_id: process.env.RAZORPAY_KEY_ID || 'rzp_test_placeholder'
-    });
+    }});
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: error.message });
+    error.statusCode = 500;
+    return next(error);
   }
 };
 
